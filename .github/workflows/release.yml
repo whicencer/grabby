@@ -1,0 +1,86 @@
+name: Release
+
+# Builds installers for macOS (Apple Silicon, Intel) and Windows and attaches them to a draft
+# GitHub Release named after the version in tauri.conf.json.
+# Start it by pushing a tag (git tag v0.1.0 && git push origin v0.1.0) or by hand in the Actions tab.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write # tauri-action creates the release and uploads files to it
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-latest # Apple Silicon runner, cross-compiles for Intel
+            target: x86_64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4 # version comes from "packageManager" in package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.target }}
+
+      # ffmpeg is built from source (minimal LGPL build): cached until build-ffmpeg.sh changes
+      - id: ffmpeg-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            src-tauri/binaries/ffmpeg-${{ matrix.target }}*
+            src-tauri/binaries/ffprobe-${{ matrix.target }}*
+          key: ffmpeg-${{ matrix.target }}-${{ hashFiles('scripts/build-ffmpeg.sh') }}
+
+      - name: Build ffmpeg (macOS)
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true' && runner.os == 'macOS'
+        run: bash scripts/build-ffmpeg.sh ${{ matrix.target }}
+
+      - name: Set up MSYS2 (Windows ffmpeg toolchain)
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true' && runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          install: make diffutils tar xz curl mingw-w64-x86_64-gcc
+      - name: Build ffmpeg (Windows)
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true' && runner.os == 'Windows'
+        shell: msys2 {0}
+        run: bash scripts/build-ffmpeg.sh ${{ matrix.target }}
+
+      - name: Download yt-dlp and Deno
+        run: node scripts/fetch-helpers.mjs ${{ matrix.target }} --no-ffmpeg
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: v__VERSION__
+          releaseName: Grabby v__VERSION__
+          releaseDraft: true
+          releaseBody: |
+            **macOS:** pick `aarch64` for Apple Silicon (M1 and newer) or `x64` for Intel.
+            The app isn't signed by Apple yet: on first launch macOS will block it. Open
+            System Settings → Privacy & Security → "Open Anyway".
+
+            **Windows:** SmartScreen may warn about an unknown publisher: More info → Run anyway.
+          args: --target ${{ matrix.target }}

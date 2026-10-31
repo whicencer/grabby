@@ -17,9 +17,13 @@ Requirements: Node.js, pnpm, Rust ([Tauri prerequisites](https://tauri.app/start
 
 ```sh
 pnpm install
+pnpm helpers           # once: downloads yt-dlp and Deno, builds ffmpeg (~2 min)
 pnpm run tauri dev     # run in dev mode
+pnpm tauri:mock        # dev mode without network: fake previews and downloads
 pnpm run tauri build   # release build
 ```
+
+Releases are built by GitHub Actions (`.github/workflows/release.yml`) when a `v*` tag is pushed.
 
 ## License
 

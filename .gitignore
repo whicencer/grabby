@@ -28,6 +28,8 @@ src-tauri/target/
 src-tauri/gen/schemas/
 # Sidecar binaries (yt-dlp, ffmpeg, deno) are downloaded by script, not committed
 src-tauri/binaries/
+# ffmpeg sources and build dirs (scripts/build-ffmpeg.sh)
+.cache/
 
 # Logs
 *.log
