@@ -5,7 +5,8 @@ export type DownloadState =
   | { kind: "idle" }
   | { kind: "downloading"; progress: DownloadProgress | null } // null until the first event
   | { kind: "done"; filePath: string }
-  | { kind: "error"; message: string };
+  | { kind: "error"; message: string }
+  | { kind: "botCheck" };
 
 export function DownloadError({ message }: { message: string }) {
   return (

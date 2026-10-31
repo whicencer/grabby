@@ -1,5 +1,5 @@
 [package]
-name = "grabby"
+name = "Grabby"
 version = "0.1.0"
 description = "Desktop app for downloading video and audio, powered by yt-dlp"
 authors = ["whicencer"]
