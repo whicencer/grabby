@@ -33,12 +33,15 @@ export const mockLiveVideo: VideoInfo = {
 };
 
 // Stands in for the future Rust `fetch_info` command until it exists
+// The URL picks the scenario, see SCENARIOS in mockApi.ts
 export function mockFetchVideo(url: string): Promise<VideoInfo> {
   return new Promise((resolve, reject) => {
     setTimeout(() => {
-      // A URL with "fail" in it tests the error path; Rust rejects with a string, so the mock does too
-      if (url.includes("fail")) {
-        reject("ERROR: Unsupported URL");
+      // Rejects with the same objects as the Rust commands (src/api/errors.ts)
+      if (url.includes("info-bot")) {
+        reject({ kind: "botCheck" });
+      } else if (url.includes("info-fail")) {
+        reject({ kind: "failed", message: "ERROR: [generic] Unsupported URL: " + url });
       } else if (url.includes("live")) {
         resolve({ ...mockLiveVideo, url });
       } else {

@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Read};
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -12,6 +13,71 @@ const FILE_PREFIX: &str = "GRABBY_FILE ";
 const PROGRESS_EVENT: &str = "download-progress";
 // A few UI updates per second is enough
 const EMIT_INTERVAL: Duration = Duration::from_millis(250);
+
+// Error of fetch_info / start_download: `kind` lets the UI show a proper notice. Mirrors src/api/errors.ts
+#[derive(Serialize, Debug, PartialEq)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+enum YtDlpError {
+    // YouTube asks to "confirm you're not a bot": it has flagged this IP, any video fails
+    BotCheck,
+    Failed { message: String },
+}
+
+impl From<String> for YtDlpError {
+    fn from(message: String) -> Self {
+        YtDlpError::Failed { message }
+    }
+}
+
+impl YtDlpError {
+    // yt-dlp has no machine-readable error codes, so this is the one place where we read its
+    // human text. Keep the markers short: the wording around them changes between versions
+    fn from_stderr(stderr: &str) -> Self {
+        if stderr.contains("not a bot") {
+            return YtDlpError::BotCheck;
+        }
+        // Warnings come first and are noise for the user: keep only the ERROR lines if any
+        let errors: Vec<&str> = stderr.lines().filter(|l| l.starts_with("ERROR:")).collect();
+        let message = if errors.is_empty() { stderr.trim().to_string() } else { errors.join("\n") };
+        YtDlpError::Failed { message }
+    }
+}
+
+// Helpers ship next to the app executable (Tauri sidecars, bundle.externalBin): Contents/MacOS
+// in the macOS bundle, the install folder on Windows. `tauri dev` copies them into target/debug.
+// Run `node scripts/fetch-helpers.mjs` once before building
+fn helpers_dir() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.to_path_buf()))
+        .unwrap_or_default()
+}
+
+fn helper_path(name: &str) -> PathBuf {
+    helpers_dir().join(format!("{name}{}", std::env::consts::EXE_SUFFIX))
+}
+
+// yt-dlp wired to our ffmpeg and Deno. --ignore-config: a yt-dlp config on the user's machine
+// must not change what the app downloads
+fn yt_dlp() -> Command {
+    let mut command = Command::new(helper_path("yt-dlp"));
+    command
+        .arg("--ignore-config")
+        .arg("--ffmpeg-location")
+        .arg(helpers_dir())
+        .arg("--js-runtimes")
+        .arg(format!("deno:{}", helper_path("deno").display()));
+
+    // Without this, every yt-dlp run flashes a console window on Windows
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    command
+}
 
 #[derive(Serialize)]
 struct AppInfo {
@@ -209,7 +275,8 @@ fn build_args(choice: &DownloadChoice, output_dir: &str, url: &str) -> Vec<Strin
         DownloadChoice::Audio { format_id } => {
             let selector = match format_id {
                 Some(id) => id.clone(),
-                None => "ba[acodec^=mp4a]/ba".to_string(),
+                // b: sites with only combined video+audio files, -x extracts the audio from them
+                None => "ba[acodec^=mp4a]/ba/b".to_string(),
             };
             args.push("-f".to_string());
             args.push(selector);
@@ -273,9 +340,9 @@ fn validate_url(url: &str) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn fetch_info(url: String) -> Result<VideoInfo, String> {
+async fn fetch_info(url: String) -> Result<VideoInfo, YtDlpError> {
     let result = tauri::async_runtime::spawn_blocking(move || {
-        Command::new("yt-dlp")
+        yt_dlp()
             .args(["-J", "--no-playlist", "--", &url])
             .output()
     })
@@ -285,7 +352,7 @@ async fn fetch_info(url: String) -> Result<VideoInfo, String> {
     let output = result.map_err(|e| format!("Failed to run yt-dlp: {e}"))?;
 
     if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        return Err(YtDlpError::from_stderr(&String::from_utf8_lossy(&output.stderr)));
     }
 
     let raw: RawVideoInfo = serde_json::from_slice(&output.stdout)
@@ -302,12 +369,12 @@ async fn start_download(
     url: String,
     choice: DownloadChoice,
     output_dir: String,
-) -> Result<String, String> {
+) -> Result<String, YtDlpError> {
     let args = build_args(&choice, &output_dir, &url);
 
     tauri::async_runtime::spawn_blocking(move || run_download(&app, &id, &args))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| YtDlpError::from(e.to_string()))?
 }
 
 // Sends at most one event per EMIT_INTERVAL
@@ -337,8 +404,8 @@ fn read_stderr_in_background(child: &mut Child) -> JoinHandle<String> {
 }
 
 // Blocking: runs yt-dlp and reads its stdout line by line while it downloads
-fn run_download(app: &AppHandle, id: &str, args: &[String]) -> Result<String, String> {
-    let mut child = Command::new("yt-dlp")
+fn run_download(app: &AppHandle, id: &str, args: &[String]) -> Result<String, YtDlpError> {
+    let mut child = yt_dlp()
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -370,11 +437,11 @@ fn run_download(app: &AppHandle, id: &str, args: &[String]) -> Result<String, St
     let stderr_text = stderr_reader.join().unwrap_or_default();
 
     if !status.success() {
-        return Err(stderr_text.trim().to_string());
+        return Err(YtDlpError::from_stderr(&stderr_text));
     }
 
     file.map(|f| f.filepath)
-        .ok_or_else(|| "yt-dlp finished but didn't report the file".to_string())
+        .ok_or_else(|| YtDlpError::from("yt-dlp finished but didn't report the file".to_string()))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -408,7 +475,7 @@ mod tests {
     fn best_audio_extracts_audio() {
         let choice = DownloadChoice::Audio { format_id: None };
         let args = build_args(&choice, "/tmp", "https://x.com/v");
-        assert_eq!(args[0..5], ["-f", "ba[acodec^=mp4a]/ba", "-S", "lang", "-x"]);
+        assert_eq!(args[0..5], ["-f", "ba[acodec^=mp4a]/ba/b", "-S", "lang", "-x"]);
         assert_eq!(args.last().unwrap(), "https://x.com/v");
     }
 
@@ -441,6 +508,19 @@ mod tests {
         assert!(audio("140-drc", 10).is_extra_audio(true));
         // Single-language video: nothing is marked original, keep everything
         assert!(!audio("140", -1).is_extra_audio(false));
+    }
+
+    #[test]
+    fn bot_check_is_recognized() {
+        let stderr = "WARNING: [youtube] No title found\nERROR: [youtube] abc: Sign in to confirm you’re not a bot. This helps";
+        assert_eq!(YtDlpError::from_stderr(stderr), YtDlpError::BotCheck);
+    }
+
+    #[test]
+    fn other_errors_keep_only_error_lines() {
+        let stderr = "WARNING: noise\nERROR: [youtube] abc: Video unavailable\n";
+        let expected = YtDlpError::Failed { message: "ERROR: [youtube] abc: Video unavailable".to_string() };
+        assert_eq!(YtDlpError::from_stderr(stderr), expected);
     }
 
     #[test]

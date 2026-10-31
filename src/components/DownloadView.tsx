@@ -7,6 +7,8 @@ import { Toast } from "./ui";
 import { validateUrl, fetchInfo, startDownload, onDownloadProgress } from "../api/commands";
 import type { DownloadState } from "./DownloadStatus";
 import { getErrorMessage } from "../shared/getErrorMessage";
+import { isBotCheck } from "../api/errors";
+import { BotCheckNotice } from "./BotCheckNotice";
 import { open } from "@tauri-apps/plugin-dialog";
 import { downloadDir } from "@tauri-apps/api/path";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -15,6 +17,7 @@ type FetchState =
   | { kind: "idle" }
   | { kind: "loading" }
   | { kind: "error"; message: string }
+  | { kind: "botCheck" }
   | { kind: "ready"; video: VideoInfo };
 
 export function DownloadView() {
@@ -31,7 +34,7 @@ export function DownloadView() {
 
   function changeUrl(value: string) {
     setUrl(value);
-    if (fetchState.kind === "error") setFetchState({ kind: "idle" });
+    if (fetchState.kind === "error" || fetchState.kind === "botCheck") setFetchState({ kind: "idle" });
   }
 
   async function check(target: string) {
@@ -50,10 +53,7 @@ export function DownloadView() {
         video
       });
     } catch (error) {
-      setFetchState({
-        kind: "error",
-        message: getErrorMessage(error)
-      });
+      setFetchState(isBotCheck(error) ? { kind: "botCheck" } : { kind: "error", message: getErrorMessage(error) });
     }
   }
 
@@ -101,7 +101,7 @@ export function DownloadView() {
       const filePath = await startDownload(id, video.url, choice, outputDir);
       setDownloadState({ kind: "done", filePath });
     } catch (error) {
-      setDownloadState({ kind: "error", message: getErrorMessage(error) });
+      setDownloadState(isBotCheck(error) ? { kind: "botCheck" } : { kind: "error", message: getErrorMessage(error) });
     } finally {
       unlisten();
     }
@@ -128,6 +128,7 @@ export function DownloadView() {
       />
 
       {fetchState.kind === "loading" && <PreviewSkeleton />}
+      {fetchState.kind === "botCheck" && <BotCheckNotice />}
 
       {video && (
         <VideoPreview

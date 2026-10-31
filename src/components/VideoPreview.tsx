@@ -3,6 +3,7 @@ import type { DownloadChoice, Format, QualityOption, VideoInfo } from "../types"
 import { formatBytes, formatDuration } from "../format";
 import { DownloadOptions } from "./DownloadOptions";
 import { Thumb } from "./ui";
+import { BotCheckNotice } from "./BotCheckNotice";
 import { DownloadError, ProgressBar, type DownloadState } from "./DownloadStatus";
 
 type VideoPreviewProps = {
@@ -40,6 +41,7 @@ export function VideoPreview({ video, outputDir, onPickFolder, onDownload, downl
       />
 
       {downloadState.kind === "error" && <DownloadError message={downloadState.message} />}
+      {downloadState.kind === "botCheck" && <BotCheckNotice />}
     </section>
   );
 }

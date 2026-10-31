@@ -8,7 +8,9 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "tauri:mock": "VITE_MOCK=1 tauri dev",
+    "helpers": "node scripts/fetch-helpers.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
@@ -27,5 +29,6 @@
     "tailwindcss": "^4.3.3",
     "typescript": "~6.0.3",
     "vite": "^8.0.16"
-  }
+  },
+  "packageManager": "pnpm@10.15.1"
 }
