@@ -1,0 +1,47 @@
+# Personal / agent notes
+.agents/*
+!.agents/README.md
+CLAUDE.local.md
+.claude/settings.local.json
+
+# Secrets (signing certificates, updater keys, env)
+.env
+.env.*
+!.env.example
+*.p12
+*.pem
+*.key
+*.cer
+*.mobileprovision
+
+# Node / Vite
+node_modules/
+dist/
+dist-ssr/
+*.local
+*.tsbuildinfo
+.vite/
+coverage/
+
+# Tauri / Rust
+src-tauri/target/
+src-tauri/gen/schemas/
+# Sidecar binaries (yt-dlp, ffmpeg, deno) are downloaded by script, not committed
+src-tauri/binaries/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editors
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db

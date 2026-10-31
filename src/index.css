@@ -1,0 +1,48 @@
+@import "tailwindcss";
+
+/* Monochrome palette. Components use only these semantic colors
+   (bg-bg, text-fg, text-muted, bg-surface, border-line…), so the theme switch lives here. */
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff;
+  --fg: #0a0a0a;
+  --muted: #737373;
+  --surface: #f2f2f2;
+  --surface-hover: #e8e8e8;
+  --line: #e2e2e2;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #000000;
+    --fg: #f5f5f5;
+    --muted: #8a8a8a;
+    --surface: #151515;
+    --surface-hover: #202020;
+    --line: #262626;
+  }
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-surface: var(--surface);
+  --color-surface-hover: var(--surface-hover);
+  --color-line: var(--line);
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  -webkit-font-smoothing: antialiased;
+  /* Desktop app: no text selection except in inputs and explicit select-text spots */
+  user-select: none;
+  cursor: default;
+}
+
+input,
+textarea,
+.select-text {
+  user-select: text;
+}
