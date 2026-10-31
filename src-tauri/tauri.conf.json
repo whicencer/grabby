@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "grabby",
+  "productName": "Grabby",
   "version": "0.1.0",
   "identifier": "com.whicencer.ytdownloader",
   "build": {
@@ -40,7 +40,8 @@
     ],
     "macOS": {
       "minimumSystemVersion": "11.0",
-      "signingIdentity": "-"
+      "signingIdentity": "-",
+      "hardenedRuntime": false
     }
   }
 }
