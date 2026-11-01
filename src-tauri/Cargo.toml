@@ -1,6 +1,6 @@
 [package]
 name = "Grabby"
-version = "0.2.0"
+version = "0.2.1"
 description = "Desktop app for downloading video and audio, powered by yt-dlp"
 authors = ["whicencer"]
 license = "GPL-3.0-or-later"
