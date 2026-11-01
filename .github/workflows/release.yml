@@ -80,6 +80,9 @@ jobs:
           tagName: v__VERSION__
           releaseName: Grabby v__VERSION__
           releaseDraft: true
+          # Both Mac builds produce an updater archive called "Grabby.app.tar.gz": without [arch]
+          # the second upload fails with "already_exists"
+          releaseAssetNamePattern: "[name]_[version]_[arch][setup][ext]"
           releaseBody: |
             **macOS:** pick `aarch64` for Apple Silicon (M1 and newer) or `x64` for Intel.
             The app isn't signed by Apple yet: on first launch macOS will block it. Open
