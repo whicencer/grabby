@@ -4,10 +4,10 @@ import { APP_NAME } from "../constants";
 import { UrlInput } from "./UrlInput";
 import { VideoPreview } from "./VideoPreview";
 import { Toast } from "./ui";
-import { validateUrl, fetchInfo, startDownload, onDownloadProgress } from "../api/commands";
+import { validateUrl, fetchInfo, startDownload, cancelDownload, onDownloadProgress } from "../api/commands";
 import type { DownloadState } from "./DownloadStatus";
 import { getErrorMessage } from "../shared/getErrorMessage";
-import { isBotCheck } from "../api/errors";
+import { isBotCheck, isCancelled } from "../api/errors";
 import { BotCheckNotice } from "./BotCheckNotice";
 import { open } from "@tauri-apps/plugin-dialog";
 import { downloadDir } from "@tauri-apps/api/path";
@@ -90,21 +90,29 @@ export function DownloadView() {
 
     // Tags the progress events of this download
     const id = crypto.randomUUID();
-    setDownloadState({ kind: "downloading", progress: null });
+    setDownloadState({ kind: "downloading", id, progress: null });
 
     // Subscribe before starting, so the first events aren't lost
     const unlisten = await onDownloadProgress((progress) => {
-      if (progress.id === id) setDownloadState({ kind: "downloading", progress });
+      if (progress.id === id) setDownloadState({ kind: "downloading", id, progress });
     });
 
     try {
       const filePath = await startDownload(id, video.url, choice, outputDir);
       setDownloadState({ kind: "done", filePath });
     } catch (error) {
-      setDownloadState(isBotCheck(error) ? { kind: "botCheck" } : { kind: "error", message: getErrorMessage(error) });
+      if (isCancelled(error)) setDownloadState({ kind: "idle" });
+      else if (isBotCheck(error)) setDownloadState({ kind: "botCheck" });
+      else setDownloadState({ kind: "error", message: getErrorMessage(error) });
     } finally {
       unlisten();
     }
+  }
+
+  function cancel() {
+    if (downloadState.kind !== "downloading") return;
+    // Rust kills yt-dlp; the pending startDownload then rejects with "cancelled"
+    cancelDownload(downloadState.id).catch(() => {});
   }
 
   const video = fetchState.kind === "ready" ? fetchState.video : null;
@@ -138,6 +146,7 @@ export function DownloadView() {
           onPickFolder={pickFolder}
           onDownload={download}
           downloadState={downloadState}
+          onCancel={cancel}
         />
       )}
 

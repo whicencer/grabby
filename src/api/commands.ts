@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { AppInfo } from "./AppInfo";
 import { DownloadChoice, DownloadProgress, VideoInfo } from "../types";
 import { mockFetchVideo } from "../mocks/media";
-import { mockOnDownloadProgress, mockStartDownload } from "../mocks/mockApi";
+import { mockCancelDownload, mockOnDownloadProgress, mockStartDownload } from "../mocks/mockApi";
 
 // `pnpm tauri:mock`: network commands are replaced by mocks, see src/mocks/mockApi.ts
 export const IS_MOCK = import.meta.env.VITE_MOCK === "1";
@@ -13,6 +13,7 @@ export const Commands = {
   VALIDATE_URL: "validate_url",
   FETCH_INFO: "fetch_info",
   START_DOWNLOAD: "start_download",
+  CANCEL_DOWNLOAD: "cancel_download",
 } as const;
 
 export function getAppInfo() {
@@ -36,6 +37,12 @@ export const Events = {
 export function startDownload(id: string, url: string, choice: DownloadChoice, outputDir: string) {
   if (IS_MOCK) return mockStartDownload(id, url, choice, outputDir);
   return invoke<string>(Commands.START_DOWNLOAD, { id, url, choice, outputDir });
+}
+
+// The startDownload call with this id then rejects with { kind: "cancelled" }
+export function cancelDownload(id: string) {
+  if (IS_MOCK) return mockCancelDownload(id);
+  return invoke<void>(Commands.CANCEL_DOWNLOAD, { id });
 }
 
 // Resolves to an unlisten function: call it when the download is over

@@ -22,6 +22,13 @@ export function mockOnDownloadProgress(handler: Listener): Promise<() => void> {
   });
 }
 
+const cancelled = new Set<string>();
+
+export function mockCancelDownload(id: string): Promise<void> {
+  cancelled.add(id);
+  return Promise.resolve();
+}
+
 const emit = (progress: DownloadProgress) => listeners.forEach((listener) => listener(progress));
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -29,6 +36,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 async function stream(id: string, totalBytes: number, seconds: number, failAtPercent?: number) {
   const steps = seconds * 4;
   for (let step = 0; step <= steps; step++) {
+    if (cancelled.delete(id)) throw { kind: "cancelled" };
     const percent = (step / steps) * 100;
     if (failAtPercent !== undefined && percent >= failAtPercent) {
       throw { kind: "failed", message: "ERROR: [download] Got error: Connection reset by peer" };

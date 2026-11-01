@@ -12,9 +12,10 @@ type VideoPreviewProps = {
   onPickFolder: () => void;
   onDownload: (choice: DownloadChoice) => void;
   downloadState: DownloadState;
+  onCancel: () => void;
 };
 
-export function VideoPreview({ video, outputDir, onPickFolder, onDownload, downloadState }: VideoPreviewProps) {
+export function VideoPreview({ video, outputDir, onPickFolder, onDownload, downloadState, onCancel }: VideoPreviewProps) {
   return (
     <section className="mt-6 rounded-2xl border border-line p-4">
       <div className="flex gap-4">
@@ -37,7 +38,7 @@ export function VideoPreview({ video, outputDir, onPickFolder, onDownload, downl
         downloadLabel="Download"
         onDownload={onDownload}
         disabled={outputDir === null}
-        progress={downloadState.kind === "downloading" ? <ProgressBar progress={downloadState.progress} /> : null}
+        progress={downloadState.kind === "downloading" ? <ProgressBar progress={downloadState.progress} onCancel={onCancel} /> : null}
       />
 
       {downloadState.kind === "error" && <DownloadError message={downloadState.message} />}
