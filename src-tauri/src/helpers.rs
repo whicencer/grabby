@@ -58,11 +58,15 @@ struct State {
 }
 
 fn updates_dir(app: &AppHandle) -> Option<PathBuf> {
-    app.path().app_data_dir().ok().map(|dir| dir.join("helpers").join("yt-dlp"))
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|dir| dir.join("helpers").join("yt-dlp"))
 }
 
 fn version_path(dir: &Path, version: &str) -> PathBuf {
-    dir.join(version).join(format!("yt-dlp{}", std::env::consts::EXE_SUFFIX))
+    dir.join(version)
+        .join(format!("yt-dlp{}", std::env::consts::EXE_SUFFIX))
 }
 
 fn load_state(dir: &Path) -> State {
@@ -109,7 +113,9 @@ fn version_of(path: &Path) -> Option<String> {
 pub async fn update_yt_dlp_if_due(app: &AppHandle) -> Result<Option<String>, String> {
     let dir = updates_dir(app).ok_or("No app data folder")?;
     let mut state = load_state(&dir);
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
     if now.saturating_sub(state.last_check) < CHECK_INTERVAL.as_secs() {
         return Ok(None);
     }
@@ -150,7 +156,11 @@ impl Release {
 
 // Downloads the latest release into `dir` if it differs from `current`, verifies it and makes it
 // active. Doesn't touch state.last_check. Ok(None) = already up to date
-async fn update(dir: &Path, state: &mut State, current: Option<&str>) -> Result<Option<String>, String> {
+async fn update(
+    dir: &Path,
+    state: &mut State,
+    current: Option<&str>,
+) -> Result<Option<String>, String> {
     let client = reqwest::Client::builder()
         // GitHub's API rejects requests without a User-Agent
         .user_agent(concat!("grabby/", env!("CARGO_PKG_VERSION")))
@@ -158,15 +168,27 @@ async fn update(dir: &Path, state: &mut State, current: Option<&str>) -> Result<
         .build()
         .map_err(|e| e.to_string())?;
 
-    let release: Release = get(&client, RELEASES_API).await?.json().await.map_err(|e| e.to_string())?;
+    let release: Release = get(&client, RELEASES_API)
+        .await?
+        .json()
+        .await
+        .map_err(|e| e.to_string())?;
     let version = release.tag_name.clone();
     if current == Some(version.as_str()) {
         return Ok(None);
     }
 
-    let sums = get(&client, release.asset_url("SHA2-256SUMS")?).await?.text().await.map_err(|e| e.to_string())?;
+    let sums = get(&client, release.asset_url("SHA2-256SUMS")?)
+        .await?
+        .text()
+        .await
+        .map_err(|e| e.to_string())?;
     let expected = expected_sha256(&sums, YTDLP_ASSET).ok_or("yt-dlp checksum not found")?;
-    let bytes = get(&client, release.asset_url(YTDLP_ASSET)?).await?.bytes().await.map_err(|e| e.to_string())?;
+    let bytes = get(&client, release.asset_url(YTDLP_ASSET)?)
+        .await?
+        .bytes()
+        .await
+        .map_err(|e| e.to_string())?;
     if sha256_hex(&bytes) != expected {
         return Err(format!("Checksum mismatch for yt-dlp {version}"));
     }
@@ -203,23 +225,29 @@ fn install(path: &Path, bytes: &[u8], version: &str) -> Result<(), String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
+        std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| e.to_string())?;
     }
     std::fs::rename(&temp, path).map_err(|e| e.to_string())?;
 
     if version_of(path).as_deref() != Some(version) {
         let _ = std::fs::remove_dir_all(folder);
-        return Err(format!("yt-dlp {version} failed to start, keeping the current one"));
+        return Err(format!(
+            "yt-dlp {version} failed to start, keeping the current one"
+        ));
     }
     Ok(())
 }
 
 // Keeps only the active and previous versions
 fn remove_unused_versions(dir: &Path, state: &State) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
-        let keep = state.active.as_deref() == Some(name.as_str()) || state.previous.as_deref() == Some(name.as_str());
+        let keep = state.active.as_deref() == Some(name.as_str())
+            || state.previous.as_deref() == Some(name.as_str());
         if entry.path().is_dir() && !keep {
             let _ = std::fs::remove_dir_all(entry.path());
         }
@@ -235,7 +263,10 @@ fn expected_sha256(sums: &str, file: &str) -> Option<String> {
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
-    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 #[cfg(test)]
@@ -245,13 +276,19 @@ mod tests {
     #[test]
     fn finds_checksum_for_exact_file_name() {
         let sums = "aaa  yt-dlp\nBBB  yt-dlp_macos\nccc  yt-dlp_macos.zip\n";
-        assert_eq!(expected_sha256(sums, "yt-dlp_macos"), Some("bbb".to_string()));
+        assert_eq!(
+            expected_sha256(sums, "yt-dlp_macos"),
+            Some("bbb".to_string())
+        );
         assert_eq!(expected_sha256(sums, "yt-dlp.exe"), None);
     }
 
     #[test]
     fn sha256_is_lowercase_hex() {
-        assert_eq!(sha256_hex(b"abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
     }
 
     #[test]
@@ -260,7 +297,11 @@ mod tests {
         for version in ["old", "previous", "active"] {
             std::fs::create_dir_all(dir.join(version)).unwrap();
         }
-        let state = State { active: Some("active".into()), previous: Some("previous".into()), last_check: 0 };
+        let state = State {
+            active: Some("active".into()),
+            previous: Some("previous".into()),
+            last_check: 0,
+        };
         remove_unused_versions(&dir, &state);
         assert!(!dir.join("old").exists());
         assert!(dir.join("previous").exists() && dir.join("active").exists());
@@ -274,9 +315,14 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("grabby-update-{}", std::process::id()));
         let mut state = State::default();
         let runtime = tauri::async_runtime::block_on(update(&dir, &mut state, Some("2000.01.01")));
-        let version = runtime.unwrap().expect("an older current version must be updated");
+        let version = runtime
+            .unwrap()
+            .expect("an older current version must be updated");
         assert_eq!(state.active.as_deref(), Some(version.as_str()));
-        assert_eq!(version_of(&version_path(&dir, &version)).as_deref(), Some(version.as_str()));
+        assert_eq!(
+            version_of(&version_path(&dir, &version)).as_deref(),
+            Some(version.as_str())
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

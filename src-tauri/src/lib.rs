@@ -39,7 +39,11 @@ impl YtDlpError {
         }
         // Warnings come first and are noise for the user: keep only the ERROR lines if any
         let errors: Vec<&str> = stderr.lines().filter(|l| l.starts_with("ERROR:")).collect();
-        let message = if errors.is_empty() { stderr.trim().to_string() } else { errors.join("\n") };
+        let message = if errors.is_empty() {
+            stderr.trim().to_string()
+        } else {
+            errors.join("\n")
+        };
         YtDlpError::Failed { message }
     }
 }
@@ -183,7 +187,11 @@ impl From<RawVideoInfo> for VideoInfo {
 
 // What the user picked in the preview: mirrors DownloadChoice in src/types.ts
 #[derive(Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 enum DownloadChoice {
     Video { max_height: Option<u32> },
     Audio { format_id: Option<String> },
@@ -241,7 +249,10 @@ fn build_args(choice: &DownloadChoice, output_dir: &str, url: &str) -> Vec<Strin
     match choice {
         DownloadChoice::Video { max_height } => {
             let (selector, sort) = match max_height {
-                Some(h) => (format!("bv*[height<={h}]+ba/b[height<={h}]"), "lang,res,vcodec:h264,acodec:aac"),
+                Some(h) => (
+                    format!("bv*[height<={h}]+ba/b[height<={h}]"),
+                    "lang,res,vcodec:h264,acodec:aac",
+                ),
                 None => ("bv*+ba/b".to_string(), "lang,vcodec:h264,res,acodec:aac"),
             };
             args.push("-f".to_string());
@@ -331,7 +342,9 @@ async fn fetch_info(app: AppHandle, url: String) -> Result<VideoInfo, YtDlpError
     let output = result.map_err(|e| format!("Failed to run yt-dlp: {e}"))?;
 
     if !output.status.success() {
-        return Err(YtDlpError::from_stderr(&String::from_utf8_lossy(&output.stderr)));
+        return Err(YtDlpError::from_stderr(&String::from_utf8_lossy(
+            &output.stderr,
+        )));
     }
 
     let raw: RawVideoInfo = serde_json::from_slice(&output.stdout)
@@ -402,8 +415,12 @@ fn run_download(app: &AppHandle, id: &str, args: &[String]) -> Result<String, Yt
             file = serde_json::from_str(json).ok();
             continue;
         }
-        let Some(json) = line.strip_prefix(PROGRESS_PREFIX) else { continue };
-        let Ok(raw) = serde_json::from_str::<RawProgress>(json) else { continue };
+        let Some(json) = line.strip_prefix(PROGRESS_PREFIX) else {
+            continue;
+        };
+        let Ok(raw) = serde_json::from_str::<RawProgress>(json) else {
+            continue;
+        };
 
         // Throttle "downloading" updates, but never drop "finished"
         if raw.status == "downloading" && !throttle.ready() {
@@ -426,6 +443,8 @@ fn run_download(app: &AppHandle, id: &str, args: &[String]) -> Result<String, Yt
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             // YouTube breaks old yt-dlp versions every few weeks: update in the background.
             // Downloads already running keep their version; new ones pick up the update
@@ -457,7 +476,9 @@ mod tests {
 
     #[test]
     fn video_with_height_limits_both_selectors() {
-        let choice = DownloadChoice::Video { max_height: Some(720) };
+        let choice = DownloadChoice::Video {
+            max_height: Some(720),
+        };
         let args = build_args(&choice, "/tmp", "https://x.com/v");
         assert_eq!(args[0..2], ["-f", "bv*[height<=720]+ba/b[height<=720]"]);
         assert!(args.contains(&"mp4".to_string()));
@@ -467,7 +488,10 @@ mod tests {
     fn best_audio_extracts_audio() {
         let choice = DownloadChoice::Audio { format_id: None };
         let args = build_args(&choice, "/tmp", "https://x.com/v");
-        assert_eq!(args[0..5], ["-f", "ba[acodec^=mp4a]/ba/b", "-S", "lang", "-x"]);
+        assert_eq!(
+            args[0..5],
+            ["-f", "ba[acodec^=mp4a]/ba/b", "-S", "lang", "-x"]
+        );
         assert_eq!(args.last().unwrap(), "https://x.com/v");
     }
 
@@ -482,7 +506,11 @@ mod tests {
 
     #[test]
     fn best_video_prefers_h264_over_resolution() {
-        let args = build_args(&DownloadChoice::Video { max_height: None }, "/tmp", "https://x.com/v");
+        let args = build_args(
+            &DownloadChoice::Video { max_height: None },
+            "/tmp",
+            "https://x.com/v",
+        );
         assert_eq!(args[2..4], ["-S", "lang,vcodec:h264,res,acodec:aac"]);
     }
 
@@ -511,13 +539,21 @@ mod tests {
     #[test]
     fn other_errors_keep_only_error_lines() {
         let stderr = "WARNING: noise\nERROR: [youtube] abc: Video unavailable\n";
-        let expected = YtDlpError::Failed { message: "ERROR: [youtube] abc: Video unavailable".to_string() };
+        let expected = YtDlpError::Failed {
+            message: "ERROR: [youtube] abc: Video unavailable".to_string(),
+        };
         assert_eq!(YtDlpError::from_stderr(stderr), expected);
     }
 
     #[test]
     fn choice_parses_from_ui_json() {
-        let choice: DownloadChoice = serde_json::from_str(r#"{"kind":"video","maxHeight":1080}"#).unwrap();
-        assert!(matches!(choice, DownloadChoice::Video { max_height: Some(1080) }));
+        let choice: DownloadChoice =
+            serde_json::from_str(r#"{"kind":"video","maxHeight":1080}"#).unwrap();
+        assert!(matches!(
+            choice,
+            DownloadChoice::Video {
+                max_height: Some(1080)
+            }
+        ));
     }
 }
