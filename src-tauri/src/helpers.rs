@@ -1,7 +1,12 @@
 // Where the helper binaries live, and how yt-dlp keeps itself up to date.
 //
-// Bundled helpers (yt-dlp, ffmpeg, ffprobe, deno) are Tauri sidecars next to the app executable:
-// Contents/MacOS on macOS, the install folder on Windows, target/debug in `tauri dev`.
+// ffmpeg, ffprobe and deno are Tauri sidecars next to the app executable: Contents/MacOS on macOS,
+// the install folder on Windows, target/debug in `tauri dev`.
+//
+// yt-dlp is a folder (executable + _internal/, yt-dlp's "onedir" build) in the app resources.
+// The single-file build unpacks Python into a new temp folder on every run, and macOS/Defender
+// re-scan it each time: ~10 s per run instead of ~0.3 s.
+//
 // A signed bundle is read-only, so newer yt-dlp versions go to <app data>/helpers/yt-dlp/<version>/
 // and are used instead of the bundled one. Each update is checked (SHA-256 + `--version`) before
 // it becomes active, and the previous version is kept to fall back to.
@@ -17,12 +22,19 @@ const RELEASES_API: &str = "https://api.github.com/repos/yt-dlp/yt-dlp/releases/
 // GitHub allows 60 unauthenticated API requests per hour: once a day is plenty
 const CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 
+// Release asset (a zip of the onedir build) and the executable inside it
 #[cfg(target_os = "macos")]
-const YTDLP_ASSET: &str = "yt-dlp_macos";
+const YTDLP_ASSET: &str = "yt-dlp_macos.zip";
+#[cfg(target_os = "macos")]
+const YTDLP_EXE: &str = "yt-dlp_macos";
 #[cfg(target_os = "windows")]
-const YTDLP_ASSET: &str = "yt-dlp.exe";
+const YTDLP_ASSET: &str = "yt-dlp_win.zip";
+#[cfg(target_os = "windows")]
+const YTDLP_EXE: &str = "yt-dlp.exe";
 #[cfg(target_os = "linux")]
-const YTDLP_ASSET: &str = "yt-dlp_linux";
+const YTDLP_ASSET: &str = "yt-dlp_linux.zip";
+#[cfg(target_os = "linux")]
+const YTDLP_EXE: &str = "yt-dlp_linux";
 
 // Folder with the bundled helpers
 pub fn bundled_dir() -> PathBuf {
@@ -34,6 +46,13 @@ pub fn bundled_dir() -> PathBuf {
 
 pub fn bundled(name: &str) -> PathBuf {
     bundled_dir().join(format!("{name}{}", std::env::consts::EXE_SUFFIX))
+}
+
+// yt-dlp shipped with the app (bundle.resources: "binaries/yt-dlp/" -> "helpers/yt-dlp/").
+// Not just "yt-dlp/": that name clashes with the old yt-dlp sidecar file in target/ folders
+fn bundled_yt_dlp(app: &AppHandle) -> PathBuf {
+    let resources = app.path().resource_dir().unwrap_or_else(|_| bundled_dir());
+    resources.join("helpers").join("yt-dlp").join(YTDLP_EXE)
 }
 
 // Without this, every helper run flashes a console window on Windows
@@ -65,8 +84,7 @@ fn updates_dir(app: &AppHandle) -> Option<PathBuf> {
 }
 
 fn version_path(dir: &Path, version: &str) -> PathBuf {
-    dir.join(version)
-        .join(format!("yt-dlp{}", std::env::consts::EXE_SUFFIX))
+    dir.join(version).join(YTDLP_EXE)
 }
 
 fn load_state(dir: &Path) -> State {
@@ -85,7 +103,7 @@ fn save_state(dir: &Path, state: &State) -> Result<(), String> {
     std::fs::rename(&temp, dir.join("state.json")).map_err(|e| e.to_string())
 }
 
-// yt-dlp to run: the active update, else the previous one, else the bundled sidecar
+// yt-dlp to run: the active update, else the previous one, else the bundled one
 pub fn yt_dlp_path(app: &AppHandle) -> PathBuf {
     if let Some(dir) = updates_dir(app) {
         let state = load_state(&dir);
@@ -96,7 +114,7 @@ pub fn yt_dlp_path(app: &AppHandle) -> PathBuf {
             }
         }
     }
-    bundled("yt-dlp")
+    bundled_yt_dlp(app)
 }
 
 // Runs `<path> --version`. None: the binary doesn't start or fails
@@ -109,8 +127,16 @@ fn version_of(path: &Path) -> Option<String> {
     (output.status.success() && !version.is_empty()).then_some(version)
 }
 
-// Checks GitHub once a day and installs a newer yt-dlp. Ok(Some(version)) = updated
+// Called on launch. Runs yt-dlp once, then (once a day) installs a newer one from GitHub.
+// Ok(Some(version)) = updated
 pub async fn update_yt_dlp_if_due(app: &AppHandle) -> Result<Option<String>, String> {
+    // First run of a yt-dlp folder takes ~10 s while macOS/Defender scan it; later runs are fast.
+    // Doing it now means the user's first preview doesn't pay for it
+    let current_path = yt_dlp_path(app);
+    let current = tauri::async_runtime::spawn_blocking(move || version_of(&current_path))
+        .await
+        .map_err(|e| e.to_string())?;
+
     let dir = updates_dir(app).ok_or("No app data folder")?;
     let mut state = load_state(&dir);
     let now = SystemTime::now()
@@ -119,11 +145,6 @@ pub async fn update_yt_dlp_if_due(app: &AppHandle) -> Result<Option<String>, Str
     if now.saturating_sub(state.last_check) < CHECK_INTERVAL.as_secs() {
         return Ok(None);
     }
-
-    let current_path = yt_dlp_path(app);
-    let current = tauri::async_runtime::spawn_blocking(move || version_of(&current_path))
-        .await
-        .map_err(|e| e.to_string())?;
 
     let result = update(&dir, &mut state, current.as_deref()).await;
     // Saved on failure too: a broken network shouldn't make us retry on every launch
@@ -216,25 +237,32 @@ async fn get(client: &reqwest::Client, url: &str) -> Result<reqwest::Response, S
         .map_err(|e| format!("{url}: {e}"))
 }
 
-// Writes the binary and checks that it runs and reports the expected version
-fn install(path: &Path, bytes: &[u8], version: &str) -> Result<(), String> {
+// Unpacks the onedir zip into <version>/ and checks that yt-dlp runs and reports `version`
+fn install(path: &Path, zip_bytes: &[u8], version: &str) -> Result<(), String> {
     let folder = path.parent().ok_or("Bad install path")?;
-    std::fs::create_dir_all(folder).map_err(|e| e.to_string())?;
-    let temp = path.with_extension("download");
-    std::fs::write(&temp, bytes).map_err(|e| e.to_string())?;
+    // Unpack into "<version>.download" first: a half-unpacked folder never looks like a version
+    let mut temp = folder.as_os_str().to_owned();
+    temp.push(".download");
+    let temp = PathBuf::from(temp);
+    let _ = std::fs::remove_dir_all(&temp);
+
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zip_bytes)).map_err(|e| e.to_string())?;
+    archive.extract(&temp).map_err(|e| format!("Failed to unpack yt-dlp {version}: {e}"))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o755))
+        std::fs::set_permissions(temp.join(YTDLP_EXE), std::fs::Permissions::from_mode(0o755))
             .map_err(|e| e.to_string())?;
     }
-    std::fs::rename(&temp, path).map_err(|e| e.to_string())?;
 
+    // A leftover of an earlier failed attempt
+    let _ = std::fs::remove_dir_all(folder);
+    std::fs::rename(&temp, folder).map_err(|e| e.to_string())?;
+
+    // Also warms up the macOS/Defender scan, so the first real run is fast
     if version_of(path).as_deref() != Some(version) {
         let _ = std::fs::remove_dir_all(folder);
-        return Err(format!(
-            "yt-dlp {version} failed to start, keeping the current one"
-        ));
+        return Err(format!("yt-dlp {version} failed to start, keeping the current one"));
     }
     Ok(())
 }

@@ -33,7 +33,6 @@
       "icons/icon.ico"
     ],
     "externalBin": [
-      "binaries/yt-dlp",
       "binaries/ffmpeg",
       "binaries/ffprobe",
       "binaries/deno"
@@ -43,7 +42,10 @@
       "signingIdentity": "-",
       "hardenedRuntime": false
     },
-    "createUpdaterArtifacts": true
+    "createUpdaterArtifacts": true,
+    "resources": {
+      "binaries/yt-dlp/": "helpers/yt-dlp/"
+    }
   },
   "plugins": {
     "updater": {
