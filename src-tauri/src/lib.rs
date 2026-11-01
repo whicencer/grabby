@@ -1,6 +1,7 @@
+mod helpers;
+
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Read};
-use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -43,39 +44,17 @@ impl YtDlpError {
     }
 }
 
-// Helpers ship next to the app executable (Tauri sidecars, bundle.externalBin): Contents/MacOS
-// in the macOS bundle, the install folder on Windows. `tauri dev` copies them into target/debug.
-// Run `node scripts/fetch-helpers.mjs` once before building
-fn helpers_dir() -> PathBuf {
-    std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.to_path_buf()))
-        .unwrap_or_default()
-}
-
-fn helper_path(name: &str) -> PathBuf {
-    helpers_dir().join(format!("{name}{}", std::env::consts::EXE_SUFFIX))
-}
-
-// yt-dlp wired to our ffmpeg and Deno. --ignore-config: a yt-dlp config on the user's machine
-// must not change what the app downloads
-fn yt_dlp() -> Command {
-    let mut command = Command::new(helper_path("yt-dlp"));
+// yt-dlp (updated or bundled, see helpers.rs) wired to the bundled ffmpeg and Deno.
+// --ignore-config: a yt-dlp config on the user's machine must not change what the app downloads
+fn yt_dlp(app: &AppHandle) -> Command {
+    let mut command = Command::new(helpers::yt_dlp_path(app));
     command
         .arg("--ignore-config")
         .arg("--ffmpeg-location")
-        .arg(helpers_dir())
+        .arg(helpers::bundled_dir())
         .arg("--js-runtimes")
-        .arg(format!("deno:{}", helper_path("deno").display()));
-
-    // Without this, every yt-dlp run flashes a console window on Windows
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
-
+        .arg(format!("deno:{}", helpers::bundled("deno").display()));
+    helpers::hide_console(&mut command);
     command
 }
 
@@ -340,9 +319,9 @@ fn validate_url(url: &str) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn fetch_info(url: String) -> Result<VideoInfo, YtDlpError> {
+async fn fetch_info(app: AppHandle, url: String) -> Result<VideoInfo, YtDlpError> {
     let result = tauri::async_runtime::spawn_blocking(move || {
-        yt_dlp()
+        yt_dlp(&app)
             .args(["-J", "--no-playlist", "--", &url])
             .output()
     })
@@ -405,7 +384,7 @@ fn read_stderr_in_background(child: &mut Child) -> JoinHandle<String> {
 
 // Blocking: runs yt-dlp and reads its stdout line by line while it downloads
 fn run_download(app: &AppHandle, id: &str, args: &[String]) -> Result<String, YtDlpError> {
-    let mut child = yt_dlp()
+    let mut child = yt_dlp(app)
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -447,6 +426,19 @@ fn run_download(app: &AppHandle, id: &str, args: &[String]) -> Result<String, Yt
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .setup(|app| {
+            // YouTube breaks old yt-dlp versions every few weeks: update in the background.
+            // Downloads already running keep their version; new ones pick up the update
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                match helpers::update_yt_dlp_if_due(&handle).await {
+                    Ok(Some(version)) => eprintln!("yt-dlp updated to {version}"),
+                    Ok(None) => {}
+                    Err(error) => eprintln!("yt-dlp update failed: {error}"),
+                }
+            });
+            Ok(())
+        })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
