@@ -1,11 +1,13 @@
 mod helpers;
 
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read};
+use std::sync::{Mutex, MutexGuard};
 use std::process::{Child, Command, Stdio};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
 
 // Marks our JSON progress lines in yt-dlp stdout
 const PROGRESS_PREFIX: &str = "GRABBY ";
@@ -21,6 +23,8 @@ const EMIT_INTERVAL: Duration = Duration::from_millis(250);
 enum YtDlpError {
     // YouTube asks to "confirm you're not a bot": it has flagged this IP, any video fails
     BotCheck,
+    // The user pressed Cancel: not an error to show
+    Cancelled,
     Failed { message: String },
 }
 
@@ -243,7 +247,7 @@ struct DownloadedFile {
 }
 
 // Turns the user's choice into yt-dlp arguments. Pure: no process, easy to test
-fn build_args(choice: &DownloadChoice, output_dir: &str, url: &str) -> Vec<String> {
+fn build_args(choice: &DownloadChoice, output_dir: &str, temp_dir: &str, url: &str) -> Vec<String> {
     let mut args: Vec<String> = Vec::new();
 
     match choice {
@@ -296,6 +300,10 @@ fn build_args(choice: &DownloadChoice, output_dir: &str, url: &str) -> Vec<Strin
     args.push("--no-playlist".to_string());
     args.push("-P".to_string());
     args.push(output_dir.to_string());
+    // .part files and separate video/audio tracks live here until the final file is ready:
+    // a cancelled download leaves nothing behind in the user's folder
+    args.push("-P".to_string());
+    args.push(format!("temp:{temp_dir}"));
     args.push("-o".to_string());
     args.push("%(title)s [%(id)s].%(ext)s".to_string());
     // "--" ends the options: a URL starting with "-" can't be read as a flag
@@ -353,6 +361,33 @@ async fn fetch_info(app: AppHandle, url: String) -> Result<VideoInfo, YtDlpError
     Ok(VideoInfo::from(raw))
 }
 
+// Running yt-dlp processes by download id, so cancel_download can stop them.
+// Tauri state shared by all commands: the Mutex makes it safe to use from several threads
+#[derive(Default)]
+struct Downloads(Mutex<DownloadsInner>);
+
+#[derive(Default)]
+struct DownloadsInner {
+    running: HashMap<String, Child>,
+    // Cancelled before yt-dlp started: run_download checks it right before spawning
+    cancelled: HashSet<String>,
+}
+
+impl Downloads {
+    fn lock(&self) -> MutexGuard<'_, DownloadsInner> {
+        // A panic while holding the lock leaves the data intact: keep using it
+        self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    // Kills every running download: when the app quits, yt-dlp must not keep running
+    fn cancel_all(&self) {
+        for (_, mut child) in self.lock().running.drain() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
 // Resolves with the saved file path; progress goes to the UI as events tagged with `id`
 #[tauri::command]
 async fn start_download(
@@ -362,11 +397,37 @@ async fn start_download(
     choice: DownloadChoice,
     output_dir: String,
 ) -> Result<String, YtDlpError> {
-    let args = build_args(&choice, &output_dir, &url);
+    // The id becomes a folder name: only allow what crypto.randomUUID() produces
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return Err(YtDlpError::from(format!("Bad download id: {id}")));
+    }
+    let cache = app.path().app_cache_dir().map_err(|e| e.to_string())?;
+    let temp_dir = cache.join("downloads").join(&id);
+    let args = build_args(&choice, &output_dir, &temp_dir.to_string_lossy(), &url);
 
-    tauri::async_runtime::spawn_blocking(move || run_download(&app, &id, &args))
-        .await
-        .map_err(|e| YtDlpError::from(e.to_string()))?
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = run_download(&app, &id, &args);
+        // Success, error or cancel: the temp files are never needed again
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        result
+    })
+    .await
+    .map_err(|e| YtDlpError::from(e.to_string()))?
+}
+
+// Stops a download; its start_download call then fails with YtDlpError::Cancelled
+#[tauri::command]
+fn cancel_download(downloads: State<Downloads>, id: String) {
+    let mut inner = downloads.lock();
+    match inner.running.remove(&id) {
+        Some(mut child) => {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        None => {
+            inner.cancelled.insert(id);
+        }
+    }
 }
 
 // Sends at most one event per EMIT_INTERVAL
@@ -397,15 +458,25 @@ fn read_stderr_in_background(child: &mut Child) -> JoinHandle<String> {
 
 // Blocking: runs yt-dlp and reads its stdout line by line while it downloads
 fn run_download(app: &AppHandle, id: &str, args: &[String]) -> Result<String, YtDlpError> {
-    let mut child = yt_dlp(app)
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to run yt-dlp: {e}"))?;
-
-    let stderr_reader = read_stderr_in_background(&mut child);
-    let stdout = child.stdout.take().expect("stdout is piped");
+    let downloads = app.state::<Downloads>();
+    let stdout;
+    let stderr_reader;
+    {
+        let mut inner = downloads.lock();
+        if inner.cancelled.remove(id) {
+            return Err(YtDlpError::Cancelled);
+        }
+        let mut child = yt_dlp(app)
+            .args(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("Failed to run yt-dlp: {e}"))?;
+        stderr_reader = read_stderr_in_background(&mut child);
+        stdout = child.stdout.take().expect("stdout is piped");
+        // From here cancel_download can find and kill it
+        inner.running.insert(id.to_string(), child);
+    }
     let mut throttle = Throttle::default();
     let mut file: Option<DownloadedFile> = None;
 
@@ -429,8 +500,13 @@ fn run_download(app: &AppHandle, id: &str, args: &[String]) -> Result<String, Yt
         let _ = app.emit(PROGRESS_EVENT, DownloadProgress::new(id, raw));
     }
 
-    let status = child.wait().map_err(|e| e.to_string())?;
+    // stdout closed: yt-dlp exited, or cancel_download killed it and took it out of the list
+    let child = downloads.lock().running.remove(id);
     let stderr_text = stderr_reader.join().unwrap_or_default();
+    let Some(mut child) = child else {
+        return Err(YtDlpError::Cancelled);
+    };
+    let status = child.wait().map_err(|e| e.to_string())?;
 
     if !status.success() {
         return Err(YtDlpError::from_stderr(&stderr_text));
@@ -443,6 +519,7 @@ fn run_download(app: &AppHandle, id: &str, args: &[String]) -> Result<String, Yt
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(Downloads::default())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
@@ -464,10 +541,16 @@ pub fn run() {
             get_app_info,
             validate_url,
             fetch_info,
-            start_download
+            start_download,
+            cancel_download
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let RunEvent::Exit = event {
+                app.state::<Downloads>().cancel_all();
+            }
+        });
 }
 
 #[cfg(test)]
@@ -479,7 +562,7 @@ mod tests {
         let choice = DownloadChoice::Video {
             max_height: Some(720),
         };
-        let args = build_args(&choice, "/tmp", "https://x.com/v");
+        let args = build_args(&choice, "/tmp", "/tmp/part", "https://x.com/v");
         assert_eq!(args[0..2], ["-f", "bv*[height<=720]+ba/b[height<=720]"]);
         assert!(args.contains(&"mp4".to_string()));
     }
@@ -487,7 +570,7 @@ mod tests {
     #[test]
     fn best_audio_extracts_audio() {
         let choice = DownloadChoice::Audio { format_id: None };
-        let args = build_args(&choice, "/tmp", "https://x.com/v");
+        let args = build_args(&choice, "/tmp", "/tmp/part", "https://x.com/v");
         assert_eq!(
             args[0..5],
             ["-f", "ba[acodec^=mp4a]/ba/b", "-S", "lang", "-x"]
@@ -509,6 +592,7 @@ mod tests {
         let args = build_args(
             &DownloadChoice::Video { max_height: None },
             "/tmp",
+            "/tmp/part",
             "https://x.com/v",
         );
         assert_eq!(args[2..4], ["-S", "lang,vcodec:h264,res,acodec:aac"]);
