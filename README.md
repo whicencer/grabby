@@ -1,32 +1,32 @@
 # Grabby
 
-Desktop app for downloading video and audio, powered by [yt-dlp](https://github.com/yt-dlp/yt-dlp).
+Grabby downloads video and audio from YouTube and other sites supported by yt-dlp. Paste a link, pick the quality or audio only, choose a folder, and track progress in the download queue.
 
-> Work in progress.
+Built with Tauri 2 (Rust), React and TypeScript, with yt-dlp, ffmpeg and Deno bundled inside the app.
 
-## Stack
+## Screenshots
 
-- [Tauri 2](https://tauri.app/) (Rust) + React 19 + TypeScript + Vite
-- yt-dlp, ffmpeg, Deno as bundled helpers
+<p align="center"><img src="https://github.com/user-attachments/assets/9bb9a85e-2c14-4b68-ab28-14512817f7f7" alt="App Screenshot" width="750"></p>
 
-Platforms: macOS (Intel + Apple Silicon), Windows.
+## Installation
 
-## Development
+Download the latest version from the [Releases page](https://github.com/whicencer/grabby/releases/latest).
 
-Requirements: Node.js, pnpm, Rust ([Tauri prerequisites](https://tauri.app/start/prerequisites/)).
+### Windows
 
-```sh
-pnpm install
-pnpm helpers           # once: downloads yt-dlp and Deno, builds ffmpeg (~2 min)
-pnpm run tauri dev     # run in dev mode
-pnpm tauri:mock        # dev mode without network: fake previews and downloads
-pnpm run tauri build   # release build
-```
+1. Download `Grabby_<version>_x64-setup.exe`.
+2. Run the installer.
+3. If SmartScreen shows "Windows protected your PC", click **More info** → **Run anyway**.
+4. Launch Grabby from the Start menu.
 
-Releases are built by GitHub Actions (`.github/workflows/release.yml`) when a `v*` tag is pushed.
+### macOS
 
-## License
-
-Copyright (C) 2026 whicencer
-
-Licensed under the [GNU General Public License v3.0 or later](LICENSE).
+1. Download the `.dmg` for your Mac:
+   - Apple Silicon (M1 and newer): `Grabby_<version>_aarch64.dmg`
+   - Intel: `Grabby_<version>_x64.dmg`
+2. Open the `.dmg` and drag Grabby into **Applications**.
+3. The app is not notarized yet, so remove the quarantine flag:
+   ```bash
+   xattr -dr com.apple.quarantine /Applications/Grabby.app
+   ```
+4. Launch Grabby from **Applications**.
