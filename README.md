@@ -1,6 +1,6 @@
 # Grabby
 
-Grabby downloads video and audio from YouTube and other sites supported by yt-dlp. Paste a link, pick the quality or audio only, choose a folder, and track progress in the download queue.
+Grabby downloads video and audio from different sites supported by yt-dlp. Paste a link, pick the quality or audio only, choose a folder, and track progress in the download queue.
 
 Built with Tauri 2 (Rust), React and TypeScript, with yt-dlp, ffmpeg and Deno bundled inside the app.
 
